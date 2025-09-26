@@ -4542,6 +4542,7 @@ MonoBehaviour:
   gameOverEnabled: 1
   gameOverThreshold: 1
   matchSound: {fileID: 1759862284}
+  matchDelay: 0.5
 --- !u!114 &1759862282
 MonoBehaviour:
   m_ObjectHideFlags: 0

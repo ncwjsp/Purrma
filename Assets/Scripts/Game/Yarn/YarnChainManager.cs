@@ -35,6 +35,10 @@ public class YarnChainManager : MonoBehaviour
     private float animationStartTime = 0f; // When the animation started
     private float originalGapSize = 0f; // Original gap size when animation started
     
+    // Match processing state
+    private bool isProcessingMatches = false;
+    private Queue<int> matchQueue = new Queue<int>();
+    
     [Header("Game Over Settings")]
     [SerializeField] private bool gameOverEnabled = true;
     [SerializeField] private float gameOverThreshold = 0.95f; // Game over when yarn reaches 95% of path
@@ -43,6 +47,9 @@ public class YarnChainManager : MonoBehaviour
     
     [Header("Audio")]
     [SerializeField] private AudioSource matchSound; // Sound effect for matching 3+ yarns
+    
+    [Header("Match Animation Settings")]
+    [SerializeField] private float matchDelay = 0.5f; // Delay between matches in a combo
 
     private void Start()
     {
@@ -62,6 +69,9 @@ public class YarnChainManager : MonoBehaviour
         
         // Clean up any destroyed yarns first
         CleanupDestroyedYarns();
+        
+        // Process match queue
+        ProcessMatchQueue();
         
         // Check for gaps and update animation state
         CheckForGaps();
@@ -244,67 +254,12 @@ public class YarnChainManager : MonoBehaviour
         yarns[i].GetComponent<YarnChainNode>().index = i;
     }
 
-    // Check for 3+ matches and pop them - check the entire chain for new matches
-    CheckForAllMatches();
+    // Check for 3+ matches and queue them for processing
+    Debug.Log("🚀 INSERT YARN COMPLETE - Starting match detection...");
+    QueueAllMatches();
 }
 
 
-    private void CheckForMatches(int startIndex)
-{
-    if (yarns[startIndex] == null) return;
-    
-    string color = yarns[startIndex].GetComponent<Yarn>().colorName;
-    Debug.Log($"Checking for matches starting at index {startIndex} with color {color}");
-
-    int left = startIndex;
-    int right = startIndex;
-
-    // Expand left
-    while (left > 0 && yarns[left - 1] != null && 
-           yarns[left - 1].GetComponent<Yarn>().colorName == color)
-        left--;
-
-    // Expand right
-    while (right < yarns.Count - 1 && yarns[right + 1] != null && 
-           yarns[right + 1].GetComponent<Yarn>().colorName == color)
-        right++;
-
-    int count = right - left + 1;
-    Debug.Log($"Found {count} consecutive yarns of color {color} from index {left} to {right}");
-    
-    if (count >= 3)
-    {
-        Debug.Log($"DESTROYING {count} yarns of color {color} at indices {left} to {right}");
-        
-        // Play match sound effect
-        if (matchSound != null)
-        {
-            matchSound.Play();
-        }
-        
-        for (int i = right; i >= left; i--)
-        {
-            if (yarns[i] != null)
-            {
-                Debug.Log($"Destroying yarn at index {i}");
-            Destroy(yarns[i]);
-                yarns.RemoveAt(i);
-                distances.RemoveAt(i);
-            }
-        }
-        
-        
-        // Close gaps after removing matched yarns
-        CloseGapsAfterRemoval(left, count);
-        
-        // Trigger gap animation after matching
-        TriggerGapAnimation();
-    }
-    else
-    {
-        Debug.Log($"Not enough consecutive yarns ({count} < 3) - no match to destroy");
-    }
-}
 
 private void CloseGapsAfterRemoval(int removedStartIndex, int removedCount)
 {
@@ -328,29 +283,18 @@ private void CloseGapsAfterRemoval(int removedStartIndex, int removedCount)
     // Trigger gap animation to start checking for gaps
     TriggerGapAnimation();
     
-    // Check for cascading matches after removal
-    CheckForCascadingMatches(removedStartIndex);
+    // Cascading matches are now handled by the queue system
 }
 
-    private void CheckForAllMatches()
+    private void QueueAllMatches()
     {
         bool foundAnyMatch = true;
         int totalMatches = 0;
         
-        Debug.Log($"Checking entire chain for matches... Total yarns: {yarns.Count}");
+        Debug.Log($"🔍 QUEUEING MATCHES... Total yarns: {yarns.Count}");
         
-        // Log current chain state
-        for (int i = 0; i < yarns.Count; i++)
-        {
-            if (yarns[i] != null)
-            {
-                var yarn = yarns[i].GetComponent<Yarn>();
-                if (yarn != null)
-                {
-                    Debug.Log($"Chain yarn {i}: {yarn.colorName}");
-                }
-            }
-        }
+        // Clear existing queue first
+        matchQueue.Clear();
         
         // Keep checking until no more matches are found
         while (foundAnyMatch && totalMatches < 50) // Increased safety limit
@@ -368,13 +312,13 @@ private void CloseGapsAfterRemoval(int removedStartIndex, int removedCount)
                     
                     if (yarn1 != null && yarn2 != null && yarn3 != null)
                     {
-                        Debug.Log($"Checking sequence {i}, {i+1}, {i+2}: {yarn1.colorName}, {yarn2.colorName}, {yarn3.colorName}");
-                        
                         if (yarn1.colorName == yarn2.colorName && 
                             yarn2.colorName == yarn3.colorName)
                         {
-                            Debug.Log($"FOUND MATCH at indices {i}, {i+1}, {i+2}: {yarn1.colorName}");
-                            CheckForMatches(i);
+                            Debug.Log($"✅ QUEUEING MATCH at indices {i}, {i+1}, {i+2}: {yarn1.colorName}");
+                            
+                            // Add to queue instead of processing immediately
+                            matchQueue.Enqueue(i);
                             foundAnyMatch = true;
                             totalMatches++;
                             break; // Start checking from the beginning again
@@ -384,18 +328,92 @@ private void CloseGapsAfterRemoval(int removedStartIndex, int removedCount)
             }
         }
         
-        // Check for win condition after all matches are processed
-        CheckForWinCondition();
-        
         if (totalMatches >= 50)
         {
-        Debug.LogWarning($"Reached maximum match checks (50). Found {totalMatches} matches total.");
+            Debug.LogWarning($"Reached maximum match checks (50). Found {totalMatches} matches total.");
+        }
+        else
+        {
+            Debug.Log($"🎯 MATCH QUEUEING COMPLETE: Found and queued {totalMatches} matches. Queue size: {matchQueue.Count}");
+        }
     }
-    else
+    
+    private float lastMatchTime = 0f;
+    
+    private void ProcessMatchQueue()
     {
-        Debug.Log($"Match checking complete. Found and processed {totalMatches} matches.");
+        if (matchQueue.Count == 0) return;
+        
+        float timeSinceLastMatch = Time.time - lastMatchTime;
+        Debug.Log($"⏰ Queue has {matchQueue.Count} matches. Time since last: {timeSinceLastMatch:F2}s, need: {matchDelay}s");
+        
+        // Check if enough time has passed since last match
+        if (timeSinceLastMatch >= matchDelay)
+        {
+            int matchIndex = matchQueue.Dequeue();
+            Debug.Log($"🎯 PROCESSING MATCH from queue: index {matchIndex}, queue remaining: {matchQueue.Count}");
+            ProcessSingleMatch(matchIndex);
+            lastMatchTime = Time.time;
+            
+            // Check for win condition after each match
+            CheckForWinCondition();
+        }
     }
-}
+    
+    private void ProcessSingleMatch(int startIndex)
+    {
+        if (yarns[startIndex] == null) return;
+        
+        string color = yarns[startIndex].GetComponent<Yarn>().colorName;
+        Debug.Log($"Processing match starting at index {startIndex} with color {color}");
+
+        int left = startIndex;
+        int right = startIndex;
+
+        // Expand left
+        while (left > 0 && yarns[left - 1] != null && 
+               yarns[left - 1].GetComponent<Yarn>().colorName == color)
+            left--;
+
+        // Expand right
+        while (right < yarns.Count - 1 && yarns[right + 1] != null && 
+               yarns[right + 1].GetComponent<Yarn>().colorName == color)
+            right++;
+
+        int count = right - left + 1;
+        Debug.Log($"Found {count} consecutive yarns of color {color} from index {left} to {right}");
+        
+        if (count >= 3)
+        {
+            Debug.Log($"DESTROYING {count} yarns of color {color} at indices {left} to {right}");
+            
+            // Play match sound effect
+            if (matchSound != null)
+            {
+                matchSound.Play();
+            }
+            
+            for (int i = right; i >= left; i--)
+            {
+                if (yarns[i] != null)
+                {
+                    Debug.Log($"Destroying yarn at index {i}");
+                    Destroy(yarns[i]);
+                    yarns.RemoveAt(i);
+                    distances.RemoveAt(i);
+                }
+            }
+            
+            // Close gaps after removing matched yarns
+            CloseGapsAfterRemoval(left, count);
+            
+            // Trigger gap animation after matching
+            TriggerGapAnimation();
+            
+            // Check for new matches that might have been created and queue them
+            QueueAllMatches();
+        }
+    }
 
 private void CleanupDestroyedYarns()
 {
@@ -853,7 +871,7 @@ private System.Collections.IEnumerator ChangeSpeedCoroutine(float targetSpeed, f
                     yarn2.colorName == yarn3.colorName)
                 {
                     Debug.Log($"Found cascading match at indices {i}, {i + 1}, {i + 2}");
-                    CheckForMatches(i);
+                    ProcessSingleMatch(i);
                     break; // Check again after this match is processed
                 }
             }
